@@ -86,4 +86,3 @@ class SwinUnet(nn.Module):
             # print(msg)
         else:
             print("none pretrain")
- 

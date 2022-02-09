@@ -36,7 +36,7 @@ from swinutils import InitWeights_He, poly_lr, to_cuda, maybe_to_torch
 
 
 class SwinTrainer(object):
-    def __init__(self,  plans_file, fold, output_folder=None, dataset_directory=None, batch_dice=True, stage=None,
+    def __init__(self, configs, plans_file, fold, output_folder=None, dataset_directory=None, batch_dice=True, stage=None,
                 unpack_data=True, deterministic=True, fp16=False) -> None:
         self.fp16 = fp16
         self.amp_grad_scaler = None
@@ -173,6 +173,8 @@ class SwinTrainer(object):
 
         self.pin_memory = True
 
+        self.configs = configs
+
     def initialize(self, training=True, force_load_plans=False):
         if not self.was_initialized:
             maybe_mkdir_p(self.output_folder)
@@ -234,11 +236,11 @@ class SwinTrainer(object):
             self.initialize_optimizer_and_scheduler()
 
     def initialize_network(self):
-        #TODO initialize a swin unet network
-        pass
+        self.network = SwinUnet(self.configs, self.patch_size, self.num_classes).cuda()
+        self.network.load_from(self.configs)
 
     def initialize_optimizer_and_scheduler(self):
-        #TODO check whether the same optimizer is used in the paper
+        #NOTE here I still used the optimization method in nnUNet, which is different from the Swin UNet
         assert self.network is not None, "self.initialize_network must be called first"
         self.optimizer = torch.optim.SGD(self.network.parameters(), self.initial_lr, weight_decay=self.weight_decay,
                                         momentum=0.99, nesterov=True)
@@ -249,7 +251,7 @@ class SwinTrainer(object):
         self.do_split()
 
         if self.threeD:
-            #TODO currently the 3D Swin UNet is not supported yet
+            #Note currently 3D is not supported
             pass
         else:
             dl_tr = DataLoader2D(self.dataset_tr, self.basic_generator_patch_size, self.patch_size, self.batch_dice,
@@ -503,9 +505,9 @@ class SwinTrainer(object):
         # want at the start of the training
         self.maybe_update_lr(self.epoch)
 
-        #TODO this function maynot be applicable at present
-        ds = self.network.do_ds 
-        self.network.do_ds = True
+        # we currently don't support ds
+        # ds = self.network.do_ds 
+        # self.network.do_ds = True
 
         #  here from nnUNetTrainerV1
         self.save_debug_information()
@@ -523,7 +525,7 @@ class SwinTrainer(object):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        #TODO check the code here
+        #here we may have a problem regarding fp16, but currently it didn't affect yet.
         self._maybe_init_amp()
 
         maybe_mkdir_p(self.output_folder)
@@ -847,7 +849,7 @@ class SwinTrainer(object):
         assumptions on the presence of class variables
         :return:
         """
-        #TODO coordinate with the Swin UNet
+        # For simplicity, we don't do that
         pass
 
     def _maybe_init_amp(self):
