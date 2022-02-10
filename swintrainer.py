@@ -874,3 +874,93 @@ class SwinTrainer(object):
         import shutil
 
         shutil.copy(self.plans_file, join(self.output_folder_base, "plans.pkl"))
+
+    def load_latest_checkpoint(self, train=True):
+        if isfile(join(self.output_folder, "model_final_checkpoint.model")):
+            return self.load_checkpoint(join(self.output_folder, "model_final_checkpoint.model"), train=train)
+        if isfile(join(self.output_folder, "model_latest.model")):
+            return self.load_checkpoint(join(self.output_folder, "model_latest.model"), train=train)
+        if isfile(join(self.output_folder, "model_best.model")):
+            return self.load_best_checkpoint(train)
+        raise RuntimeError("No checkpoint found")
+
+    def load_checkpoint(self, fname, train=True):
+        self.print_to_log_file("loading checkpoint", fname, "train=", train)
+        if not self.was_initialized:
+            self.initialize(train)
+        # saved_model = torch.load(fname, map_location=torch.device('cuda', torch.cuda.current_device()))
+        saved_model = torch.load(fname, map_location=torch.device('cpu'))
+        self.load_checkpoint_ram(saved_model, train)
+
+    def load_checkpoint_ram(self, checkpoint, train=True):
+        """
+        used for if the checkpoint is already in ram
+        :param checkpoint:
+        :param train:
+        :return:
+        """
+        if not self.was_initialized:
+            self.initialize(train)
+
+        new_state_dict = OrderedDict()
+        curr_state_dict_keys = list(self.network.state_dict().keys())
+        # if state dict comes form nn.DataParallel but we use non-parallel model here then the state dict keys do not
+        # match. Use heuristic to make it match
+        for k, value in checkpoint['state_dict'].items():
+            key = k
+            if key not in curr_state_dict_keys and key.startswith('module.'):
+                key = key[7:]
+            new_state_dict[key] = value
+
+        if self.fp16:
+            self._maybe_init_amp()
+            if train:
+                if 'amp_grad_scaler' in checkpoint.keys():
+                    self.amp_grad_scaler.load_state_dict(checkpoint['amp_grad_scaler'])
+
+        self.network.load_state_dict(new_state_dict)
+        self.epoch = checkpoint['epoch']
+        if train:
+            optimizer_state_dict = checkpoint['optimizer_state_dict']
+            if optimizer_state_dict is not None:
+                self.optimizer.load_state_dict(optimizer_state_dict)
+
+            if self.lr_scheduler is not None and hasattr(self.lr_scheduler, 'load_state_dict') and checkpoint[
+                'lr_scheduler_state_dict'] is not None:
+                self.lr_scheduler.load_state_dict(checkpoint['lr_scheduler_state_dict'])
+
+            if issubclass(self.lr_scheduler.__class__, _LRScheduler):
+                self.lr_scheduler.step(self.epoch)
+
+        self.all_tr_losses, self.all_val_losses, self.all_val_losses_tr_mode, self.all_val_eval_metrics = checkpoint[
+            'plot_stuff']
+
+        # load best loss (if present)
+        if 'best_stuff' in checkpoint.keys():
+            self.best_epoch_based_on_MA_tr_loss, self.best_MA_tr_loss_for_patience, self.best_val_eval_criterion_MA = checkpoint[
+                'best_stuff']
+
+        # after the training is done, the epoch is incremented one more time in my old code. This results in
+        # self.epoch = 1001 for old trained models when the epoch is actually 1000. This causes issues because
+        # len(self.all_tr_losses) = 1000 and the plot function will fail. We can easily detect and correct that here
+        if self.epoch != len(self.all_tr_losses):
+            self.print_to_log_file("WARNING in loading checkpoint: self.epoch != len(self.all_tr_losses). This is "
+                                "due to an old bug and should only appear when you are loading old models. New "
+                                "models should have this fixed! self.epoch is now set to len(self.all_tr_losses)")
+            self.epoch = len(self.all_tr_losses)
+            self.all_tr_losses = self.all_tr_losses[:self.epoch]
+            self.all_val_losses = self.all_val_losses[:self.epoch]
+            self.all_val_losses_tr_mode = self.all_val_losses_tr_mode[:self.epoch]
+            self.all_val_eval_metrics = self.all_val_eval_metrics[:self.epoch]
+
+        self._maybe_init_amp()
+
+    def load_best_checkpoint(self, train=True):
+        if self.fold is None:
+            raise RuntimeError("Cannot load best checkpoint if self.fold is None")
+        if isfile(join(self.output_folder, "model_best.model")):
+            self.load_checkpoint(join(self.output_folder, "model_best.model"), train=train)
+        else:
+            self.print_to_log_file("WARNING! model_best.model does not exist! Cannot load best checkpoint. Falling "
+                                "back to load_latest_checkpoint")
+            self.load_latest_checkpoint(train)
