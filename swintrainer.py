@@ -350,6 +350,7 @@ class SwinTrainer(object):
         self.batch_size = stage_plans['batch_size']
         self.net_pool_per_axis = stage_plans['num_pool_per_axis']
         self.patch_size = np.array(stage_plans['patch_size']).astype(int)
+        self.patch_size = np.array([224, 224])  # here, because we need to complie with the pretrained Swin. It needs to specify
         self.do_dummy_2D_aug = stage_plans['do_dummy_2D_data_aug']
 
         if 'pool_op_kernel_sizes' not in stage_plans.keys():
