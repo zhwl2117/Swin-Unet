@@ -175,11 +175,30 @@ class SwinTrainer(object):
 
         self.configs = configs
 
+    def update_fold(self, fold):
+        """
+        used to swap between folds for inference (ensemble of models from cross-validation)
+        DO NOT USE DURING TRAINING AS THIS WILL NOT UPDATE THE DATASET SPLIT AND THE DATA AUGMENTATION GENERATORS
+        :param fold:
+        :return:
+        """
+        if fold is not None:
+            if isinstance(fold, str):
+                assert fold == "all", "if self.fold is a string then it must be \'all\'"
+                if self.output_folder.endswith("%s" % str(self.fold)):
+                    self.output_folder = self.output_folder_base
+                self.output_folder = join(self.output_folder, "%s" % str(fold))
+            else:
+                if self.output_folder.endswith("fold_%s" % str(self.fold)):
+                    self.output_folder = self.output_folder_base
+                self.output_folder = join(self.output_folder, "fold_%s" % str(fold))
+            self.fold = fold
+
     def initialize(self, training=True, force_load_plans=False):
         if not self.was_initialized:
             maybe_mkdir_p(self.output_folder)
 
-            if force_load_plans or (self.plans):
+            if force_load_plans or (self.plans is None):
                 self.load_plans_file()
 
             self.process_plans(self.plans)
@@ -254,10 +273,10 @@ class SwinTrainer(object):
             #Note currently 3D is not supported
             pass
         else:
-            dl_tr = DataLoader2D(self.dataset_tr, self.basic_generator_patch_size, self.patch_size, self.batch_dice,
-                                False, oversample_foreground_percent=self.oversample_foreground_percent,
+            dl_tr = DataLoader2D(self.dataset_tr, self.basic_generator_patch_size, self.patch_size, self.batch_size,
+                                oversample_foreground_percent=self.oversample_foreground_percent,
                                 pad_mode='constant', pad_sides=self.pad_all_sides, memmap_mode='r')
-            dl_val = DataLoader2D(self.dataset_val, self.patch_size, self.patch_size, self.batch_dice,
+            dl_val = DataLoader2D(self.dataset_val, self.patch_size, self.patch_size, self.batch_size,
                                 oversample_foreground_percent=self.oversample_foreground_percent,
                                 pad_mode='constant', pad_sides=self.pad_all_sides, memmap_mode='r')
         return dl_tr, dl_val
@@ -863,7 +882,6 @@ class SwinTrainer(object):
             if not k.startswith("__"):
                 if not callable(getattr(self, k)):
                     dct[k] = str(getattr(self, k))
-        del dct['plans']
         del dct['plans']
         del dct['intensity_properties']
         del dct['dataset']

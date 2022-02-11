@@ -10,7 +10,7 @@ from config import get_config
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-network", default='3d_fullres')
+    parser.add_argument("-network", default='2d')
     parser.add_argument("-task", help="can be task name or task id", default='5')
     parser.add_argument("-fold", help='0, 1, ..., 5 or \'all\'', default=0)
     parser.add_argument("-val", "--validation_only", help="use this if you want to only run the validation",
@@ -32,7 +32,20 @@ def main():
                             "this is not necessary. Deterministic training will make you overfit to some random seed. "
                             "Don't use that.",
                         required=False, default=False, action="store_true")
-    parser.add_argument('--cfg', type=str, required=True, metavar="FILE", help='path to config file', )
+    parser.add_argument('-cfg', type=str, required=False, metavar="FILE", help='path to config file', default='./configs/swin_tiny_patch4_window7_224_lite.yaml')  # NOTE debugging, I set the required to be false
+    parser.add_argument("--opts", help="Modify config options by adding 'KEY VALUE' pairs. ", default=None, nargs='+',)
+    parser.add_argument('--batch_size', type=int, default=24, help='batch_size per gpu')
+    parser.add_argument('--zip', action='store_true', help='use zipped dataset instead of folder dataset')
+    parser.add_argument('--cache-mode', type=str, default='part', choices=['no', 'full', 'part'],
+                    help='no: no cache, full: cache all data, part: sharding the dataset into nonoverlapping pieces and only cache one piece')
+    parser.add_argument('--resume', help='resume from checkpoint')
+    parser.add_argument('--accumulation-steps', type=int, help="gradient accumulation steps")
+    parser.add_argument('--use-checkpoint', action='store_true', help="whether to use gradient checkpointing to save memory")
+    parser.add_argument('--amp-opt-level', type=str, default='O1', choices=['O0', 'O1', 'O2'], help='mixed precision opt level, if O0, no amp is used')
+    parser.add_argument('--tag', help='tag of experiment')
+    parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
+    parser.add_argument('--throughput', action='store_true', help='Test throughput only')
+    parser.add_argument('--modalities', type=int, default=2, help='determine the input channel')
 
     args = parser.parse_args()
     task = args.task
@@ -43,14 +56,14 @@ def main():
     deterministic = args.deterministic
     configs = get_config(args)
 
-    if not task.startwith('Task'):
+    if not task.startswith('Task'):
         task_id = int(task)
         task = convert_id_to_task_name(task_id)
 
     if fold != 'all':
         fold = int(fold)
 
-    plans_file, output_folder_name, dataset_directory, batch_dice, stage= get_default_configuration(network, task, plans_identifier)
+    plans_file, output_folder_name, dataset_directory, batch_dice, stage= get_default_configuration(network, task, network_trainer='swin_trainer', plans_identifier=plans_identifier)
 
     trainer = SwinTrainer(configs, plans_file, fold, output_folder=output_folder_name, dataset_directory=dataset_directory,
                         batch_dice=batch_dice, stage=stage, deterministic=deterministic)
