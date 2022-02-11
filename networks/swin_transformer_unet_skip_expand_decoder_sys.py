@@ -360,7 +360,7 @@ class FinalPatchExpand_X4(nn.Module):
         self.input_resolution = input_resolution
         self.dim = dim
         self.dim_scale = dim_scale
-        self.expand = nn.Linear(dim, 16*dim, bias=False)
+        self.expand = nn.Linear(dim, (dim_scale**2)*dim, bias=False)
         self.output_dim = dim 
         self.norm = norm_layer(self.output_dim)
 
@@ -601,6 +601,7 @@ class SwinTransformerSys(nn.Module):
         self.num_features_up = int(embed_dim * 2)
         self.mlp_ratio = mlp_ratio
         self.final_upsample = final_upsample
+        self.img_size = img_size
 
         # split image into non-overlapping patches
         self.patch_embed = PatchEmbed(
@@ -669,10 +670,14 @@ class SwinTransformerSys(nn.Module):
 
         if self.final_upsample == "expand_first":
             print("---final upsample expand_first---")
-            self.up = FinalPatchExpand_X4(input_resolution=(img_size//patch_size,img_size//patch_size),dim_scale=4,dim=embed_dim)
+            self.up = FinalPatchExpand_X4(input_resolution=(self.img_size//patch_size,self.img_size//patch_size),dim_scale=6,dim=embed_dim)  #NOTE here we have a hard code to make the dim_scale equal to the patch_size
             self.output = nn.Conv2d(in_channels=embed_dim,out_channels=self.num_classes,kernel_size=1,bias=False)
 
         self.apply(self._init_weights)
+
+    def adjust_linear_proj(self, image_size, patch_size, in_chans, norm_layer=nn.LayerNorm):
+        self.img_size = image_size
+        self.patch_embed = PatchEmbed(self.img_size, patch_size, in_chans, self.embed_dim, norm_layer=norm_layer if self.patch_norm else None)
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -728,7 +733,7 @@ class SwinTransformerSys(nn.Module):
 
         if self.final_upsample=="expand_first":
             x = self.up(x)
-            x = x.view(B,4*H,4*W,-1)
+            x = x.view(B,6*H,6*W,-1)  #NOTE here is a hard code because we force the final layer to rebuild the size of the input image
             x = x.permute(0,3,1,2) #B,C,H,W
             x = self.output(x)
             

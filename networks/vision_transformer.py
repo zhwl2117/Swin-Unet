@@ -86,3 +86,8 @@ class SwinUnet(nn.Module):
             # print(msg)
         else:
             print("none pretrain")
+
+    def adjust_linear_proj(self, image_size, patch_size, in_chans):
+        self.swin_unet.adjust_linear_proj(image_size, patch_size, in_chans)
+        if torch.cuda.is_available():
+            self.swin_unet.cuda()

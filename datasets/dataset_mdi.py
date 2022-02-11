@@ -51,10 +51,6 @@ class DataLoader2D(SlimDataLoaderBase):
     def generate_train_batch(self):
         selected_keys = np.random.choice(self.list_of_keys, self.batch_size, True, None)
 
-        #NOTE here, we make channel size add 1 to satisfy the 3 dim
-        self.data_shape = list(self.data_shape)
-        self.data_shape[1] += 1
-
         data = np.zeros(self.data_shape, dtype=np.float32)
         seg = np.zeros(self.seg_shape, dtype=np.float32)
 
@@ -190,9 +186,6 @@ class DataLoader2D(SlimDataLoaderBase):
                                                             (-min(0, bbox_x_lb), max(bbox_x_ub - shape[0], 0)),
                                                             (-min(0, bbox_y_lb), max(bbox_y_ub - shape[1], 0))),
                                          self.pad_mode, **self.pad_kwargs_data)
-            # NOTE here we need to do some modification to match the channel to 3
-            radndom_idx = np.random.choice(len(case_all_data_donly))
-            case_all_data_donly = np.concatenate([case_all_data_donly, case_all_data_donly[radndom_idx][None]], axis=0)
 
             case_all_data_segonly = np.pad(case_all_data[-1:], ((0, 0),
                                                                 (-min(0, bbox_x_lb), max(bbox_x_ub - shape[0], 0)),

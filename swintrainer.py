@@ -33,7 +33,9 @@ from loss_fn.deep_supervision import MultipleOutputLoss2
 from datasets.utils.dataset_loading import load_dataset, unpack_dataset
 from datasets.datagen_mdi import default_3D_augmentation_params, default_2D_augmentation_params, get_patch_size, get_moreDA_augmentation
 from swinutils import InitWeights_He, poly_lr, to_cuda, maybe_to_torch
+import torch.nn.functional as F
 
+softmax_helper = lambda x: F.softmax(x, 1)
 
 class SwinTrainer(object):
     def __init__(self, configs, plans_file, fold, output_folder=None, dataset_directory=None, batch_dice=True, stage=None,
@@ -219,7 +221,7 @@ class SwinTrainer(object):
             weights = weights / weights.sum()
             self.ds_loss_weights = weights
             # now wrap the loss
-            self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)
+            # self.loss = MultipleOutputLoss2(self.loss, self.ds_loss_weights)  # NOTE here because we currently don't support deep supervision. So it would be only one loss
             ################# END ###################
 
             self.folder_with_preprocessed_data = join(self.dataset_directory, self.plans['data_identifier'] +
@@ -253,10 +255,14 @@ class SwinTrainer(object):
 
             self.initialize_network()
             self.initialize_optimizer_and_scheduler()
+        else:
+            self.print_to_log_file('self.was_initialized is True, not running self.initialize again')
+        self.was_initialized = True
 
     def initialize_network(self):
         self.network = SwinUnet(self.configs, self.patch_size, self.num_classes).cuda()
         self.network.load_from(self.configs)
+        self.network.adjust_linear_proj(336, 6, 2)  # NOTE here, we also made a hard code to set the patch_size = image_size // 56 and in_chans = num_modalities
 
     def initialize_optimizer_and_scheduler(self):
         #NOTE here I still used the optimization method in nnUNet, which is different from the Swin UNet
@@ -369,7 +375,7 @@ class SwinTrainer(object):
         self.batch_size = stage_plans['batch_size']
         self.net_pool_per_axis = stage_plans['num_pool_per_axis']
         self.patch_size = np.array(stage_plans['patch_size']).astype(int)
-        self.patch_size = np.array([224, 224])  # here, because we need to complie with the pretrained Swin. It needs to specify
+        self.patch_size = np.array([336, 336])  # here, because we need to complie with the pretrained Swin. It needs to specify
         self.do_dummy_2D_aug = stage_plans['do_dummy_2D_data_aug']
 
         if 'pool_op_kernel_sizes' not in stage_plans.keys():
@@ -575,7 +581,8 @@ class SwinTrainer(object):
                         tbar.set_postfix(loss=l)
                         train_losses_epoch.append(l)
             else:
-                for _ in range(self.num_batches_per_epoch):
+                for it in range(self.num_batches_per_epoch):
+                    # print(f'batch idx: {it}')
                     l = self.run_iteration(self.tr_gen, True)
                     train_losses_epoch.append(l)
 
@@ -830,7 +837,7 @@ class SwinTrainer(object):
             with autocast():
                 output = self.network(data)
                 del data
-                l = self.loss(output, target)
+                l = self.loss(output, target[0]) # NOTE, target will have 6 segs for deep supervision. But currently we only support the last one
 
             if do_backprop:
                 self.amp_grad_scaler.scale(l).backward()
@@ -841,7 +848,7 @@ class SwinTrainer(object):
         else:
             output = self.network(data)
             del data
-            l = self.loss(output, target)
+            l = self.loss(output, target[0]) # NOTE, target will have 6 segs for deep supervision. But currently we only support the last one
 
             if do_backprop:
                 l.backward()
@@ -849,11 +856,35 @@ class SwinTrainer(object):
                 self.optimizer.step()
 
         if run_online_evaluation:
-            self.run_online_evaluation(output, target)
+            self.run_online_evaluation(output, target[0])  # NOTE, target will have 6 segs for deep supervision. But currently we only support the last one
 
         del target
 
         return l.detach().cpu().numpy()
+
+    def run_online_evaluation(self, output, target):
+        with torch.no_grad():
+            num_classes = output.shape[1]
+            output_softmax = softmax_helper(output)
+            output_seg = output_softmax.argmax(1)
+            target = target[:, 0]
+            axes = tuple(range(1, len(target.shape)))
+            tp_hard = torch.zeros((target.shape[0], num_classes - 1)).to(output_seg.device.index)
+            fp_hard = torch.zeros((target.shape[0], num_classes - 1)).to(output_seg.device.index)
+            fn_hard = torch.zeros((target.shape[0], num_classes - 1)).to(output_seg.device.index)
+            for c in range(1, num_classes):
+                tp_hard[:, c - 1] = sum_tensor((output_seg == c).float() * (target == c).float(), axes=axes)
+                fp_hard[:, c - 1] = sum_tensor((output_seg == c).float() * (target != c).float(), axes=axes)
+                fn_hard[:, c - 1] = sum_tensor((output_seg != c).float() * (target == c).float(), axes=axes)
+
+            tp_hard = tp_hard.sum(0, keepdim=False).detach().cpu().numpy()
+            fp_hard = fp_hard.sum(0, keepdim=False).detach().cpu().numpy()
+            fn_hard = fn_hard.sum(0, keepdim=False).detach().cpu().numpy()
+
+            self.online_eval_foreground_dc.append(list((2 * tp_hard) / (2 * tp_hard + fp_hard + fn_hard + 1e-8)))
+            self.online_eval_tp.append(list(tp_hard))
+            self.online_eval_fp.append(list(fp_hard))
+            self.online_eval_fn.append(list(fn_hard))
 
     def maybe_update_lr(self, epoch=None):
         if epoch is None:
@@ -982,3 +1013,13 @@ class SwinTrainer(object):
             self.print_to_log_file("WARNING! model_best.model does not exist! Cannot load best checkpoint. Falling "
                                 "back to load_latest_checkpoint")
             self.load_latest_checkpoint(train)
+
+def sum_tensor(inp, axes, keepdim=False):
+    axes = np.unique(axes).astype(int)
+    if keepdim:
+        for ax in axes:
+            inp = inp.sum(int(ax), keepdim=True)
+    else:
+        for ax in sorted(axes, reverse=True):
+            inp = inp.sum(int(ax))
+    return inp
