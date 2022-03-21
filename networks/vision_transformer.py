@@ -86,4 +86,6 @@ class SwinUnet(nn.Module):
             # print(msg)
         else:
             print("none pretrain")
- 
+
+    def adjust_patch_embedding(self, input_size,):
+        pass
